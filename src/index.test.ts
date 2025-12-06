@@ -7,7 +7,7 @@ import {
   downloadTempFile,
   EnvSchema,
   jar,
-} from "../src/index.ts";
+} from "./index.ts";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
