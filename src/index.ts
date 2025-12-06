@@ -3,19 +3,18 @@ import { CookieJar } from "tough-cookie";
 import * as cheerio from "cheerio";
 import { z } from "zod";
 import dotenv from "dotenv";
-import FormData from "form-data";
 import fs from "fs";
 import path from "path";
 import { Command } from "commander";
 
 dotenv.config();
 
-const EnvSchema = z.object({
+export const EnvSchema = z.object({
   CHOMIKUJ_USERNAME: z.string(),
   CHOMIKUJ_PASSWORD: z.string(),
 });
 
-const jar = new CookieJar();
+export const jar = new CookieJar();
 const fetch = makeFetchCookie(globalThis.fetch, jar);
 
 const DEFAULT_HEADERS = {
@@ -23,32 +22,49 @@ const DEFAULT_HEADERS = {
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
   "Accept-Language": "en-US,en;q=0.9",
   Origin: "https://chomikuj.pl",
+  "sec-ch-ua": '"Chromium";v="143", "Not A(Brand";v="24"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"',
+  "sec-fetch-dest": "empty",
+  "sec-fetch-mode": "cors",
+  "sec-fetch-site": "same-origin",
+  priority: "u=1, i",
 };
 
-async function getRequestVerificationToken(): Promise<string> {
-  console.log("Fetching homepage to get verification token...");
-  const response = await fetch("https://chomikuj.pl/", {
+export async function getRequestVerificationToken(url: string = "https://chomikuj.pl/"): Promise<string[]> {
+  console.log(`Fetching ${url} to get verification token...`);
+  const response = await fetch(url, {
     headers: DEFAULT_HEADERS,
   });
   const html = await response.text();
   const $ = cheerio.load(html);
-  const token = $('input[name="__RequestVerificationToken"]').val();
+  const tokens = $('input[name="__RequestVerificationToken"]');
+  console.log(`Found ${tokens.length} tokens.`);
 
-  if (!token || typeof token !== "string") {
+  const tokenValues: string[] = [];
+  tokens.each((_, el) => {
+    const val = $(el).val();
+    if (typeof val === "string") {
+      tokenValues.push(val);
+    }
+  });
+
+  if (tokenValues.length === 0) {
     throw new Error("Could not find __RequestVerificationToken on homepage");
   }
 
-  console.log("Token found:", token.substring(0, 10) + "...");
-  return token;
+  return tokenValues;
 }
 
-async function login(token: string, env: z.infer<typeof EnvSchema>) {
+export async function login(tokens: string[], env: z.infer<typeof EnvSchema>) {
   console.log("Logging in...");
   const params = new URLSearchParams();
+  // Match curl order: Token1, ReturnUrl, Login, Password, Token2 (if exists)
+  if (tokens.length > 0) params.append("__RequestVerificationToken", tokens[0]);
+  params.append("ReturnUrl", `/${env.CHOMIKUJ_USERNAME}`);
   params.append("Login", env.CHOMIKUJ_USERNAME);
   params.append("Password", env.CHOMIKUJ_PASSWORD);
-  params.append("__RequestVerificationToken", token);
-  params.append("ReturnUrl", `/${env.CHOMIKUJ_USERNAME}`);
+  if (tokens.length > 1) params.append("__RequestVerificationToken", tokens[1]);
 
   const response = await fetch("https://chomikuj.pl/action/Login/TopBarLogin", {
     method: "POST",
@@ -75,12 +91,17 @@ const GetUrlResponseSchema = z.object({
   AnonymousUpload: z.boolean(),
 });
 
-async function getUploadUrl(token: string, env: z.infer<typeof EnvSchema>, folderId: string): Promise<string> {
+export async function getUploadUrl(
+  tokens: string[],
+  env: z.infer<typeof EnvSchema>,
+  folderId: string,
+): Promise<string> {
   console.log(`Getting upload URL for folder ${folderId}...`);
   const params = new URLSearchParams();
   params.append("accountname", env.CHOMIKUJ_USERNAME);
   params.append("folderid", folderId);
-  params.append("__RequestVerificationToken", token);
+  // Assuming getUploadUrl just needs one token, usually the first one?
+  if (tokens.length > 0) params.append("__RequestVerificationToken", tokens[0]);
 
   const response = await fetch("https://chomikuj.pl/action/Upload/GetUrl/", {
     method: "POST",
@@ -105,30 +126,48 @@ async function getUploadUrl(token: string, env: z.infer<typeof EnvSchema>, folde
   return data.Url;
 }
 
-async function uploadFile(uploadUrl: string, filePath: string) {
+export async function uploadFile(uploadUrl: string, filePath: string) {
   console.log(`Uploading file: ${filePath}...`);
 
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
 
-  const form = new FormData();
   const fileName = path.basename(filePath);
-  const fileStream = fs.createReadStream(filePath);
 
-  form.append("files[]", fileStream, { filename: fileName });
+  // Manually construct multipart body to avoid FormData issues
+  const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
+  const fileContent = fs.readFileSync(filePath);
 
-  const response = await fetch(uploadUrl, {
+  const pre = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+  );
+  const post = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+  const body = Buffer.concat([pre, fileContent, post]);
+
+  // Get cookies manually
+  const cookies = await jar.getCookieString(uploadUrl);
+
+  const headers: Record<string, string> = {
+    "User-Agent": DEFAULT_HEADERS["User-Agent"],
+    "Accept-Language": DEFAULT_HEADERS["Accept-Language"],
+    Origin: "https://chomikuj.pl",
+    Referer: "https://chomikuj.pl/",
+    Cookie: cookies,
+    "Content-Type": `multipart/form-data; boundary=${boundary}`,
+    "Content-Length": body.length.toString(),
+  };
+
+  const response = await globalThis.fetch(uploadUrl, {
     method: "POST",
-    headers: {
-      ...DEFAULT_HEADERS,
-      ...form.getHeaders(),
-      Referer: "https://chomikuj.pl/",
-    },
-    body: form as unknown as BodyInit,
+    headers,
+    body,
   });
 
   if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Upload error response:", errorText);
     throw new Error(`Upload failed with status ${response.status}`);
   }
 
@@ -148,9 +187,9 @@ program
   .action(async (file, options) => {
     try {
       const env = EnvSchema.parse(process.env);
-      const token = await getRequestVerificationToken();
-      await login(token, env);
-      const uploadUrl = await getUploadUrl(token, env, options.folder);
+      const tokens = await getRequestVerificationToken();
+      await login(tokens, env);
+      const uploadUrl = await getUploadUrl(tokens, env, options.folder);
       await uploadFile(uploadUrl, file);
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
@@ -158,4 +197,8 @@ program
     }
   });
 
-program.parse();
+import { pathToFileURL } from "url";
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  program.parse();
+}
