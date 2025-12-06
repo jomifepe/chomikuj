@@ -232,8 +232,6 @@ export async function uploadFile(uploadUrl: string, filePath: string, customFile
   return fileUrl;
 }
 
-const program = new Command();
-
 export async function downloadTempFile(url: string): Promise<string> {
   console.log(`Downloading from ${url}...`);
   const response = await fetch(url);
@@ -253,14 +251,21 @@ export async function downloadTempFile(url: string): Promise<string> {
   return tempPath;
 }
 
+interface CommandOptions {
+  folder: string;
+  name?: string;
+}
+
+const program = new Command();
+
 program
   .name("chomikuj-uploader")
   .description("Upload files to Chomikuj.pl")
   .version("1.0.0")
-  .argument("[input]", "file path or URL to upload")
-  .option("-f, --folder <id>", "folder ID to upload to")
+  .argument("<file>", "file path or URL to upload")
+  .requiredOption("-f, --folder <id>", "folder ID to upload to")
   .option("-n, --name <name>", "custom filename for the upload")
-  .action(async (input, options) => {
+  .action(async (input: string, options: CommandOptions) => {
     try {
       if (import.meta.url === `file://${process.argv[1]}`) {
         if (!input) {
@@ -277,7 +282,7 @@ program
         const profileUrl = `https://chomikuj.pl/${env.CHOMIKUJ_USERNAME}`;
         const newTokens = await getRequestVerificationToken(profileUrl);
 
-        const folderId = options.folder || "0"; // Default to root folder if not specified
+        const folderId = options.folder; // Default to root folder if not specified
         const uploadUrl = await getUploadUrl(newTokens, env, folderId);
 
         if (input.startsWith("http")) {
