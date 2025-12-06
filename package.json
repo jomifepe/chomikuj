@@ -1,0 +1,38 @@
+{
+  "name": "chomikuj-uploader",
+  "version": "1.0.0",
+  "description": "Script to upload files to chomikuj.pl",
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "dev": "tsup --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "commander": "^14.0.2",
+    "dotenv": "^16.4.7",
+    "fetch-cookie": "^2.2.0",
+    "form-data": "^4.0.1",
+    "tough-cookie": "^5.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/tough-cookie": "^4.0.5",
+    "eslint": "^9.16.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "globals": "^15.13.0",
+    "prettier": "^3.4.2",
+    "tsup": "^8.0.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0"
+  }
+}
