@@ -6,7 +6,7 @@ import {
   uploadFile,
   downloadTempFile,
   EnvSchema,
-  jar,
+  cookieJar,
 } from "./index.ts";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -39,7 +39,7 @@ describe("Chomikuj Uploader", () => {
     console.log("Logged in successfully.");
 
     // Verify cookies
-    const cookieString = await jar.getCookieString("https://chomikuj.pl");
+    const cookieString = await cookieJar.getCookieString("https://chomikuj.pl");
     expect(cookieString).toContain("ChomikSession");
 
     // Refresh token from profile page

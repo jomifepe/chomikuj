@@ -9,7 +9,6 @@ A tool for uploading files to [chomikuj.pl](https://chomikuj.pl), a Polish file 
 - Node.js (ES modules support)
 - Valid chomikuj.pl account credentials
 
-
 ### Configuration
 
 Build the tool:
@@ -38,10 +37,24 @@ npm start -- path/to/file.txt -f 19
 npm start -- https://example.com/file.pdf -f 19
 ```
 
+### Remote file headers
+
+You can provide custom headers for the remote file download in the `headers.json` file. This is useful if the file is behind a login wall.
+
+```json
+{
+  "example.com": {
+    "Cookie": "key=value; key2=value2;",
+    "Accept": "image/webp"
+  }
+}
+```
+
 ## Options
 
 - `-f, --folder <id>` - (Required) Folder ID to upload to (default: "0" for root folder)
 - `-n, --name [name]` - (Optional) Custom filename for the upload (extension will be preserved)
+- `-m, --mimetype [mimetype]` - (Optional) Custom MIME type for the downloaded file
 
 ## Development
 
@@ -60,4 +73,3 @@ npm run test # Run tests
 ## License
 
 MIT
-
