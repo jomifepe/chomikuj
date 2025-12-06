@@ -7,7 +7,7 @@ import {
   downloadTempFile,
   EnvSchema,
   jar,
-} from "./index.ts";
+} from "../src/index.ts";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
@@ -17,7 +17,7 @@ type EnvSchema = z.infer<typeof EnvSchema>;
 
 dotenv.config();
 
-describe("Chomikuj Uploader Integration", () => {
+describe("Chomikuj Uploader", () => {
   let env: EnvSchema;
   let uploadUrl: string;
 
@@ -51,7 +51,7 @@ describe("Chomikuj Uploader Integration", () => {
 
     // 4. Get Upload URL
     // Use folder 19 (test folder)
-    console.log("Getting upload URL for folder 19...");
+    console.log("Getting upload URL for folder...");
     uploadUrl = await getUploadUrl(newTokens, env, "19");
     expect(uploadUrl).toBeDefined();
     expect(uploadUrl).toMatch(/^https?:\/\//);
@@ -60,7 +60,7 @@ describe("Chomikuj Uploader Integration", () => {
 
   it("should upload local a file", async () => {
     // 5. Upload File (Local)
-    const testFilePath = path.resolve(__dirname, "../test.txt");
+    const testFilePath = path.resolve(__dirname, "../test-file.txt");
     if (!fs.existsSync(testFilePath)) {
       fs.writeFileSync(testFilePath, "Integration test content");
     }
@@ -71,7 +71,7 @@ describe("Chomikuj Uploader Integration", () => {
 
     expect(fileUrl).toBeDefined();
     expect(typeof fileUrl).toBe("string");
-    expect(fileUrl).toContain("/darrelllance/"); // Basic check based on username
+    expect(fileUrl).toContain(`/${env.CHOMIKUJ_USERNAME}/`); // Basic check based on username
     expect(fileUrl).toContain("custom-test-file"); // Check if custom name is in URL
     expect(fileUrl).toMatch(/custom-test-file.*\.txt$/); // Ensure extension is preserved at the end
   }, 60000);
