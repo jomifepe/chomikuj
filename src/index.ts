@@ -39,7 +39,6 @@ const GetUrlResponseSchema = z.object({
   AnonymousUpload: z.boolean(),
 });
 
-// Temp file cleanup registry
 const tempFiles = new Set<string>();
 
 function registerTempFile(filePath: string): void {
@@ -64,31 +63,21 @@ function cleanupTempFiles(): void {
   tempFiles.clear();
 }
 
-// Register cleanup handlers for various exit scenarios
 function setupCleanupHandlers(): void {
-  // Handle normal exit
   process.on("exit", cleanupTempFiles);
-
-  // Handle Ctrl+C
   process.on("SIGINT", () => {
     cleanupTempFiles();
     process.exit(130);
   });
-
-  // Handle termination signal
   process.on("SIGTERM", () => {
     cleanupTempFiles();
     process.exit(143);
   });
-
-  // Handle uncaught exceptions
   process.on("uncaughtException", (error) => {
     console.error("Uncaught exception:", error);
     cleanupTempFiles();
     process.exit(1);
   });
-
-  // Handle unhandled promise rejections
   process.on("unhandledRejection", (reason) => {
     console.error("Unhandled rejection:", reason);
     cleanupTempFiles();
@@ -96,7 +85,6 @@ function setupCleanupHandlers(): void {
   });
 }
 
-// Setup cleanup handlers on module load
 setupCleanupHandlers();
 
 export const cookieJar = new CookieJar();
@@ -123,7 +111,7 @@ export async function getRequestVerificationToken(url: string = baseUrl): Promis
   const html = await response.text();
   const $ = cheerio.load(html);
   const tokens = $('input[name="__RequestVerificationToken"]');
-  console.log(`Found ${tokens.length} tokens.`);
+  console.log(`Found ${tokens.length} verification tokens.`);
 
   const tokenValues: string[] = [];
   tokens.each((_, el) => {
@@ -142,13 +130,14 @@ export async function getRequestVerificationToken(url: string = baseUrl): Promis
 
 export async function login(tokens: string[], env: z.infer<typeof EnvSchema>) {
   console.log("Logging in...");
+
   const params = new URLSearchParams();
-  // Match curl order: Token1, ReturnUrl, Login, Password, Token2 (if exists)
-  if (tokens.length > 0) params.append("__RequestVerificationToken", tokens[0]);
   params.append("ReturnUrl", `/${env.CHOMIKUJ_USERNAME}`);
   params.append("Login", env.CHOMIKUJ_USERNAME);
   params.append("Password", env.CHOMIKUJ_PASSWORD);
-  if (tokens.length > 1) params.append("__RequestVerificationToken", tokens[1]);
+  for (let i = 0; i < tokens.length; i++) {
+    params.append(`__RequestVerificationToken`, tokens[i]);
+  }
 
   const response = await fetch(`${baseUrl}/action/Login/TopBarLogin`, {
     method: "POST",
@@ -156,7 +145,6 @@ export async function login(tokens: string[], env: z.infer<typeof EnvSchema>) {
       ...DEFAULT_HEADERS,
       "Content-Type": "application/x-www-form-urlencoded",
       Referer: `${baseUrl}/${env.CHOMIKUJ_USERNAME}`,
-      "X-Requested-With": "XMLHttpRequest",
     },
     body: params,
   });
@@ -174,11 +162,13 @@ export async function getUploadUrl(
   folderId: string,
 ): Promise<string> {
   console.log(`Getting upload URL for folder ${folderId}...`);
+
   const params = new URLSearchParams();
   params.append("accountname", env.CHOMIKUJ_USERNAME);
   params.append("folderid", folderId);
-  // Assuming getUploadUrl just needs one token, usually the first one?
-  if (tokens.length > 0) params.append("__RequestVerificationToken", tokens[0]);
+  for (let i = 0; i < tokens.length; i++) {
+    params.append(`__RequestVerificationToken`, tokens[i]);
+  }
 
   const response = await fetch(`${baseUrl}/action/Upload/GetUrl/`, {
     method: "POST",
@@ -186,7 +176,6 @@ export async function getUploadUrl(
       ...DEFAULT_HEADERS,
       "Content-Type": "application/x-www-form-urlencoded",
       Referer: `${baseUrl}/${env.CHOMIKUJ_USERNAME}`,
-      "X-Requested-With": "XMLHttpRequest",
     },
     body: params,
   });
@@ -195,8 +184,7 @@ export async function getUploadUrl(
     throw new Error(`Failed to get upload URL: ${response.status}`);
   }
 
-  const json = await response.json();
-  const data = GetUrlResponseSchema.parse(json);
+  const data = GetUrlResponseSchema.parse(await response.json());
 
   console.log("Upload URL obtained:", data.Url);
   return data.Url;
@@ -206,20 +194,18 @@ export async function uploadFile(uploadUrl: string, filePath: string, customFile
   const stats = await fs.promises.stat(filePath);
   const fileSize = stats.size;
 
-  const ext = path.extname(filePath);
+  const extension = path.extname(filePath);
   let fileName = path.basename(filePath);
 
   if (customFileName) {
-    if (customFileName.endsWith(ext)) {
+    if (customFileName.endsWith(extension)) {
       fileName = customFileName;
     } else {
-      fileName = customFileName + ext;
+      fileName = customFileName + extension;
     }
   }
 
-  // Manually construct multipart body to avoid FormData issues and enable progress logging
   const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
-
   const pre = Buffer.from(
     `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
   );
@@ -252,7 +238,6 @@ export async function uploadFile(uploadUrl: string, filePath: string, customFile
     combinedStream.end();
   });
 
-  // Get cookies manually
   const cookies = await cookieJar.getCookieString(uploadUrl);
 
   const headers: Record<string, string> = {
@@ -296,7 +281,6 @@ export async function uploadFile(uploadUrl: string, filePath: string, customFile
 const headersSchema = z.record(z.string(), z.record(z.string(), z.string()));
 
 function normalizeMimeType(mimeType: string): string {
-  // Remove charset and other parameters, convert to lowercase
   return mimeType.split(";")[0].trim().toLowerCase();
 }
 
