@@ -1,7 +1,7 @@
 {
   "name": "chomikuj-uploader",
   "version": "1.0.0",
-  "description": "Script to upload files to chomikuj.pl",
+  "description": "Upload files to chomikuj.pl",
   "type": "module",
   "scripts": {
     "build": "tsup",

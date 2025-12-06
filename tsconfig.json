@@ -8,7 +8,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]

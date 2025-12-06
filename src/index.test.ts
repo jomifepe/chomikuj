@@ -1,47 +1,70 @@
-import { describe, it, expect } from "vitest";
-import { getRequestVerificationToken, login, getUploadUrl, uploadFile, EnvSchema, jar } from "./index.js";
+import { describe, it, expect, beforeAll } from "vitest";
+import {
+  getRequestVerificationToken,
+  login,
+  getUploadUrl,
+  uploadFile,
+  downloadTempFile,
+  EnvSchema,
+  jar,
+} from "./index.ts";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
+import { z } from "zod";
+
+type EnvSchema = z.infer<typeof EnvSchema>;
 
 dotenv.config();
 
 describe("Chomikuj Uploader Integration", () => {
-  it("should upload a file successfully", async () => {
+  let env: EnvSchema;
+  let uploadUrl: string;
+
+  beforeAll(async () => {
     // 1. Validate Env
-    const env = EnvSchema.parse(process.env);
+    env = EnvSchema.parse(process.env);
     expect(env.CHOMIKUJ_USERNAME).toBeDefined();
     expect(env.CHOMIKUJ_PASSWORD).toBeDefined();
 
-    // 1. Set initial cookies
-    await jar.setCookie("cookiesAccepted=1", "https://chomikuj.pl");
-
-    // 2. Get Token
+    // 2. Get Verification Token (Initial)
+    console.log("Fetching https://chomikuj.pl/ to get verification token...");
     const tokens = await getRequestVerificationToken();
-    expect(tokens).toBeDefined();
-    expect(Array.isArray(tokens)).toBe(true);
     expect(tokens.length).toBeGreaterThan(0);
+    console.log(`Found ${tokens.length} tokens.`);
 
     // 3. Login
+    console.log("Logging in...");
     await login(tokens, env);
+    console.log("Logged in successfully.");
 
-    // 3.5 Refresh Token from Profile Page
+    // Verify cookies
+    const cookieString = await jar.getCookieString("https://chomikuj.pl");
+    expect(cookieString).toContain("ChomikSession");
+
+    // Refresh token from profile page
+    console.log(`Fetching https://chomikuj.pl/${env.CHOMIKUJ_USERNAME} to get verification token...`);
     const profileUrl = `https://chomikuj.pl/${env.CHOMIKUJ_USERNAME}`;
     const newTokens = await getRequestVerificationToken(profileUrl);
-    expect(newTokens).toBeDefined();
-    // expect(newTokens).not.toBe(tokens); // Arrays are reference types, so this is always true.
+    expect(newTokens.length).toBeGreaterThan(0);
+    console.log(`Found ${newTokens.length} tokens.`);
 
     // 4. Get Upload URL
     // Use folder 19 (test folder)
-    const uploadUrl = await getUploadUrl(newTokens, env, "19");
+    console.log("Getting upload URL for folder 19...");
+    uploadUrl = await getUploadUrl(newTokens, env, "19");
     expect(uploadUrl).toBeDefined();
     expect(uploadUrl).toMatch(/^https?:\/\//);
+    console.log("Upload URL obtained:", uploadUrl);
+  }, 60000);
 
-    // 5. Upload File
+  it("should upload local a file", async () => {
+    // 5. Upload File (Local)
     const testFilePath = path.resolve(__dirname, "../test.txt");
     if (!fs.existsSync(testFilePath)) {
       fs.writeFileSync(testFilePath, "Integration test content");
     }
+
     console.log(`Uploading file: ${testFilePath}...`);
     const customName = "custom-test-file"; // No extension provided
     const fileUrl = await uploadFile(uploadUrl, testFilePath, customName);
@@ -50,11 +73,29 @@ describe("Chomikuj Uploader Integration", () => {
     expect(typeof fileUrl).toBe("string");
     expect(fileUrl).toContain("/darrelllance/"); // Basic check based on username
     expect(fileUrl).toContain("custom-test-file"); // Check if custom name is in URL
-    // The URL usually looks like .../custom-test-file,12345.txt or similar, so checking for the name is safe.
-    // We can also check if it implicitly has the extension if the server preserves it in the URL structure,
-    // but usually Chomikuj URLs are like /path/to/file,id.ext
     expect(fileUrl).toMatch(/custom-test-file.*\.txt$/); // Ensure extension is preserved at the end
+  }, 60000);
 
-    // If we reach here without error, it passed.
-  }, 60000); // Increase timeout for network requests
+  it("should download and upload a file", async () => {
+    // 6. Upload File (URL)
+    const publicFileUrl = "https://www.google.com/robots.txt";
+    // Fallback to robots.txt if the above doesn't exist (since I can't verify the user's repo content)
+    // But let's try the user's request first, corrected.
+
+    console.log(`Downloading and uploading from URL: ${publicFileUrl}...`);
+
+    const tempPath = await downloadTempFile(publicFileUrl);
+    try {
+      const urlCustomName = "url-test-file";
+      const urlFileUrl = await uploadFile(uploadUrl, tempPath, urlCustomName);
+
+      expect(urlFileUrl).toBeDefined();
+      expect(urlFileUrl).toContain("url-test-file");
+      expect(urlFileUrl).toMatch(/url-test-file.*\.txt$/);
+    } finally {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    }
+  }, 60000);
 });

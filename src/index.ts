@@ -6,12 +6,35 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { Command } from "commander";
+import os from "os";
+import { pipeline } from "stream/promises";
+import { PassThrough } from "stream";
 
 dotenv.config();
 
 export const EnvSchema = z.object({
   CHOMIKUJ_USERNAME: z.string(),
   CHOMIKUJ_PASSWORD: z.string(),
+});
+
+const UploadResponseSchema = z.object({
+  files: z.array(
+    z.object({
+      name: z.string(),
+      size: z.number(),
+      id: z.number(),
+      fileId: z.number(),
+      url: z.string(),
+      folderName: z.string(),
+    }),
+  ),
+});
+
+const GetUrlResponseSchema = z.object({
+  Url: z.string(),
+  ChomikId: z.number(),
+  FolderId: z.number(),
+  AnonymousUpload: z.boolean(),
 });
 
 export const jar = new CookieJar();
@@ -84,13 +107,6 @@ export async function login(tokens: string[], env: z.infer<typeof EnvSchema>) {
   console.log("Logged in successfully.");
 }
 
-const GetUrlResponseSchema = z.object({
-  Url: z.string(),
-  ChomikId: z.number(),
-  FolderId: z.number(),
-  AnonymousUpload: z.boolean(),
-});
-
 export async function getUploadUrl(
   tokens: string[],
   env: z.infer<typeof EnvSchema>,
@@ -124,25 +140,6 @@ export async function getUploadUrl(
   console.log("Upload URL obtained:", data.Url);
   return data.Url;
 }
-
-import { PassThrough } from "stream";
-
-// ... existing imports ...
-
-// ... existing code ...
-
-const UploadResponseSchema = z.object({
-  files: z.array(
-    z.object({
-      name: z.string(),
-      size: z.number(),
-      id: z.number(),
-      fileId: z.number(),
-      url: z.string(),
-      folderName: z.string(),
-    }),
-  ),
-});
 
 export async function uploadFile(uploadUrl: string, filePath: string, customFileName?: string): Promise<string> {
   const stats = await fs.promises.stat(filePath);
@@ -237,16 +234,40 @@ export async function uploadFile(uploadUrl: string, filePath: string, customFile
 
 const program = new Command();
 
+export async function downloadTempFile(url: string): Promise<string> {
+  console.log(`Downloading from ${url}...`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download file: ${response.statusText}`);
+  }
+
+  const urlPath = new URL(url).pathname;
+  const fileName = path.basename(urlPath) || `temp-${Date.now()}`;
+  const tempPath = path.join(os.tmpdir(), fileName);
+
+  const fileStream = fs.createWriteStream(tempPath);
+  // @ts-expect-error - body is a ReadableStream
+  await pipeline(response.body, fileStream);
+
+  console.log(`Downloaded to ${tempPath}`);
+  return tempPath;
+}
+
 program
   .name("chomikuj-uploader")
   .description("Upload files to Chomikuj.pl")
   .version("1.0.0")
-  .argument("<file>", "file to upload")
+  .argument("[input]", "file path or URL to upload")
   .option("-f, --folder <id>", "folder ID to upload to")
   .option("-n, --name <name>", "custom filename for the upload")
-  .action(async (filePath, options) => {
+  .action(async (input, options) => {
     try {
       if (import.meta.url === `file://${process.argv[1]}`) {
+        if (!input) {
+          console.error("Error: File path or URL must be provided");
+          process.exit(1);
+        }
+
         // Only run if executed directly
         const env = EnvSchema.parse(process.env);
         const tokens = await getRequestVerificationToken();
@@ -258,7 +279,20 @@ program
 
         const folderId = options.folder || "0"; // Default to root folder if not specified
         const uploadUrl = await getUploadUrl(newTokens, env, folderId);
-        await uploadFile(uploadUrl, filePath, options.name);
+
+        if (input.startsWith("http")) {
+          const tempPath = await downloadTempFile(input);
+          try {
+            await uploadFile(uploadUrl, tempPath, options.name);
+          } finally {
+            if (fs.existsSync(tempPath)) {
+              fs.unlinkSync(tempPath);
+              console.log(`Deleted temp file: ${tempPath}`);
+            }
+          }
+        } else {
+          await uploadFile(uploadUrl, input, options.name);
+        }
       }
     } catch (error) {
       console.error("Error:", error);
