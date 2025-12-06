@@ -2,6 +2,9 @@
   "name": "chomikuj-uploader",
   "version": "1.0.0",
   "description": "Upload files to chomikuj.pl",
+  "author": "jomifepe",
+  "keywords": [],
+  "license": "ISC",
   "type": "module",
   "scripts": {
     "build": "tsup",
@@ -12,9 +15,6 @@
     "format": "prettier --write .",
     "test": "vitest run"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "cheerio": "^1.0.0",
     "commander": "^14.0.2",

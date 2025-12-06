@@ -19,6 +19,63 @@ export const EnvSchema = z.object({
   CHOMIKUJ_PASSWORD: z.string(),
 });
 
+const CommandOptionsSchema = z.object({
+  folder: z.string(),
+  name: z.string().optional(),
+  mimetype: z
+    .enum([
+      "text/plain",
+      "text/html",
+      "text/css",
+      "text/javascript",
+      "text/csv",
+      "text/xml",
+      "text/markdown",
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/gif",
+      "image/webp",
+      "image/svg+xml",
+      "image/bmp",
+      "image/tiff",
+      "image/x-icon",
+      "audio/mpeg",
+      "audio/mp3",
+      "audio/wav",
+      "audio/ogg",
+      "audio/webm",
+      "audio/aac",
+      "audio/flac",
+      "video/mp4",
+      "video/mpeg",
+      "video/quicktime",
+      "video/x-msvideo",
+      "video/webm",
+      "video/ogg",
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-powerpoint",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/zip",
+      "application/x-zip-compressed",
+      "application/x-rar-compressed",
+      "application/x-7z-compressed",
+      "application/gzip",
+      "application/x-tar",
+      "application/json",
+      "application/xml",
+      "application/javascript",
+      "application/typescript",
+      "application/octet-stream",
+      "application/x-binary",
+    ])
+    .optional(),
+});
+
 const UploadResponseSchema = z.object({
   files: z.array(
     z.object({
@@ -273,7 +330,7 @@ export async function uploadFile(uploadUrl: string, filePath: string, customFile
   }
 
   const fileUrl = parsed.files[0].url;
-  console.log("File URL:", fileUrl);
+  console.log("File URL:", `${baseUrl}/${fileUrl}`);
 
   return fileUrl;
 }
@@ -284,9 +341,8 @@ function normalizeMimeType(mimeType: string): string {
   return mimeType.split(";")[0].trim().toLowerCase();
 }
 
+const MAX_REDIRECTS = 10;
 export async function downloadTempFile(url: string, expectedMimeType?: string): Promise<string> {
-  const MAX_REDIRECTS = 10;
-
   const parsedUrl = new URL(url);
   const hostname = parsedUrl.hostname;
 
@@ -417,76 +473,6 @@ export async function downloadTempFile(url: string, expectedMimeType?: string): 
   throw new Error(`Redirect loop detected after ${MAX_REDIRECTS} redirects`);
 }
 
-const VALID_MIME_TYPES = [
-  // Text
-  "text/plain",
-  "text/html",
-  "text/css",
-  "text/javascript",
-  "text/csv",
-  "text/xml",
-  "text/markdown",
-  // Images
-  "image/jpeg",
-  "image/jpg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-  "image/bmp",
-  "image/tiff",
-  "image/x-icon",
-  // Audio
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/wav",
-  "audio/ogg",
-  "audio/webm",
-  "audio/aac",
-  "audio/flac",
-  // Video
-  "video/mp4",
-  "video/mpeg",
-  "video/quicktime",
-  "video/x-msvideo",
-  "video/webm",
-  "video/ogg",
-  // Documents
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  // Archives
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/x-rar-compressed",
-  "application/x-7z-compressed",
-  "application/gzip",
-  "application/x-tar",
-  // Code
-  "application/json",
-  "application/xml",
-  "application/javascript",
-  "application/typescript",
-  // Other
-  "application/octet-stream",
-  "application/x-binary",
-] as const;
-
-function isValidMimeType(mimeType: string): boolean {
-  const normalized = normalizeMimeType(mimeType);
-  return VALID_MIME_TYPES.includes(normalized as (typeof VALID_MIME_TYPES)[number]);
-}
-
-interface CommandOptions {
-  folder: string;
-  name?: string;
-  mimetype?: string;
-}
-
 const program = new Command();
 
 program
@@ -497,52 +483,32 @@ program
   .requiredOption("-f, --folder <id>", "folder ID to upload to")
   .option("-n, --name <name>", "custom filename for the upload")
   .option("-m, --mimetype <type>", "expected MIME type (only for URL downloads)")
-  .action(async (input: string, options: CommandOptions) => {
+  .action(async (input: string, opts: z.infer<typeof CommandOptionsSchema>) => {
     try {
-      if (import.meta.url === `file://${process.argv[1]}`) {
-        if (!input) {
-          console.error("Error: File path or URL must be provided");
-          process.exit(1);
-        }
+      const { folder, name, mimetype } = CommandOptionsSchema.parse(opts);
+      const env = EnvSchema.parse(process.env);
 
-        // Validate mimetype if provided
-        if (options.mimetype) {
-          if (!isValidMimeType(options.mimetype)) {
-            console.error(`Error: Invalid MIME type "${options.mimetype}"`);
-            console.error(`Valid MIME types: ${VALID_MIME_TYPES.join(", ")}`);
-            process.exit(1);
+      const tokens = await getRequestVerificationToken();
+      await login(tokens, env);
+
+      const profileUrl = `${baseUrl}/${env.CHOMIKUJ_USERNAME}`;
+      const newTokens = await getRequestVerificationToken(profileUrl);
+
+      const uploadUrl = await getUploadUrl(newTokens, env, folder);
+
+      if (input.startsWith("http")) {
+        const tempPath = await downloadTempFile(input, mimetype);
+        try {
+          await uploadFile(uploadUrl, tempPath, name);
+        } finally {
+          if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+            unregisterTempFile(tempPath);
+            console.log(`Deleted temp file: ${tempPath}`);
           }
         }
-
-        // Only run if executed directly
-        const env = EnvSchema.parse(process.env);
-        const tokens = await getRequestVerificationToken();
-        await login(tokens, env);
-
-        // Refresh token from profile page (often needed)
-        const profileUrl = `${baseUrl}/${env.CHOMIKUJ_USERNAME}`;
-        const newTokens = await getRequestVerificationToken(profileUrl);
-
-        const folderId = options.folder; // Default to root folder if not specified
-        const uploadUrl = await getUploadUrl(newTokens, env, folderId);
-
-        if (input.startsWith("http")) {
-          const tempPath = await downloadTempFile(input, options.mimetype);
-          try {
-            await uploadFile(uploadUrl, tempPath, options.name);
-          } finally {
-            if (fs.existsSync(tempPath)) {
-              fs.unlinkSync(tempPath);
-              unregisterTempFile(tempPath);
-              console.log(`Deleted temp file: ${tempPath}`);
-            }
-          }
-        } else {
-          if (options.mimetype) {
-            console.warn("Warning: --mimetype option is only used for URL downloads, ignoring for local file");
-          }
-          await uploadFile(uploadUrl, input, options.name);
-        }
+      } else {
+        await uploadFile(uploadUrl, input, name);
       }
     } catch (error) {
       console.error("Error:", error);
@@ -550,9 +516,6 @@ program
     }
   });
 
-if (import.meta.url.startsWith("file:")) {
-  const modulePath = import.meta.url.slice(7); // Remove 'file://'
-  if (modulePath === process.argv[1]) {
-    program.parse();
-  }
+if (import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith(process.argv[1])) {
+  program.parse();
 }
