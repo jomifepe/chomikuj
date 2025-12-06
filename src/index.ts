@@ -119,32 +119,80 @@ export async function getUploadUrl(
   }
 
   const json = await response.json();
-  console.log("GetUrl response:", json);
   const data = GetUrlResponseSchema.parse(json);
 
   console.log("Upload URL obtained:", data.Url);
   return data.Url;
 }
 
-export async function uploadFile(uploadUrl: string, filePath: string) {
-  console.log(`Uploading file: ${filePath}...`);
+import { PassThrough } from "stream";
 
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
+// ... existing imports ...
+
+// ... existing code ...
+
+const UploadResponseSchema = z.object({
+  files: z.array(
+    z.object({
+      name: z.string(),
+      size: z.number(),
+      id: z.number(),
+      fileId: z.number(),
+      url: z.string(),
+      folderName: z.string(),
+    }),
+  ),
+});
+
+export async function uploadFile(uploadUrl: string, filePath: string, customFileName?: string): Promise<string> {
+  const stats = await fs.promises.stat(filePath);
+  const fileSize = stats.size;
+
+  const ext = path.extname(filePath);
+  let fileName = path.basename(filePath);
+
+  if (customFileName) {
+    if (customFileName.endsWith(ext)) {
+      fileName = customFileName;
+    } else {
+      fileName = customFileName + ext;
+    }
   }
 
-  const fileName = path.basename(filePath);
-
-  // Manually construct multipart body to avoid FormData issues
+  // Manually construct multipart body to avoid FormData issues and enable progress logging
   const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
-  const fileContent = fs.readFileSync(filePath);
 
   const pre = Buffer.from(
     `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
   );
   const post = Buffer.from(`\r\n--${boundary}--\r\n`);
 
-  const body = Buffer.concat([pre, fileContent, post]);
+  const totalLength = pre.length + fileSize + post.length;
+
+  let uploadedBytes = 0;
+  let lastLoggedProgress = 0;
+
+  console.log(`Upload progress: 0% (0/${fileSize} bytes)`);
+
+  const combinedStream = new PassThrough();
+  combinedStream.write(pre);
+
+  const fileStream = fs.createReadStream(filePath);
+
+  fileStream.on("data", (chunk) => {
+    uploadedBytes += chunk.length;
+    const progress = Math.round((uploadedBytes / fileSize) * 100);
+    if ((progress - lastLoggedProgress >= 5 || progress === 100) && lastLoggedProgress !== 100) {
+      console.log(`Upload progress: ${progress}% (${uploadedBytes}/${fileSize} bytes)`);
+      lastLoggedProgress = progress;
+    }
+  });
+
+  fileStream.pipe(combinedStream, { end: false });
+  fileStream.on("end", () => {
+    combinedStream.write(post);
+    combinedStream.end();
+  });
 
   // Get cookies manually
   const cookies = await jar.getCookieString(uploadUrl);
@@ -156,13 +204,15 @@ export async function uploadFile(uploadUrl: string, filePath: string) {
     Referer: "https://chomikuj.pl/",
     Cookie: cookies,
     "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    "Content-Length": body.length.toString(),
+    "Content-Length": totalLength.toString(),
   };
 
   const response = await globalThis.fetch(uploadUrl, {
     method: "POST",
     headers,
-    body,
+    // @ts-expect-error - duplex is required for stream bodies in Node fetch
+    duplex: "half",
+    body: combinedStream as unknown as BodyInit,
   });
 
   if (!response.ok) {
@@ -171,34 +221,54 @@ export async function uploadFile(uploadUrl: string, filePath: string) {
     throw new Error(`Upload failed with status ${response.status}`);
   }
 
-  const responseBody = await response.text();
+  const json = await response.json();
   console.log("Upload complete!");
-  console.log("Response:", responseBody);
+
+  const parsed = UploadResponseSchema.parse(json);
+  if (parsed.files.length === 0) {
+    throw new Error("No files returned in upload response");
+  }
+
+  const fileUrl = parsed.files[0].url;
+  console.log("File URL:", fileUrl);
+
+  return fileUrl;
 }
 
 const program = new Command();
 
 program
   .name("chomikuj-uploader")
-  .description("Upload files to chomikuj.pl")
+  .description("Upload files to Chomikuj.pl")
   .version("1.0.0")
   .argument("<file>", "file to upload")
-  .option("-f, --folder <id>", "folder ID to upload to", "0")
-  .action(async (file, options) => {
+  .option("-f, --folder <id>", "folder ID to upload to")
+  .option("-n, --name <name>", "custom filename for the upload")
+  .action(async (filePath, options) => {
     try {
-      const env = EnvSchema.parse(process.env);
-      const tokens = await getRequestVerificationToken();
-      await login(tokens, env);
-      const uploadUrl = await getUploadUrl(tokens, env, options.folder);
-      await uploadFile(uploadUrl, file);
+      if (import.meta.url === `file://${process.argv[1]}`) {
+        // Only run if executed directly
+        const env = EnvSchema.parse(process.env);
+        const tokens = await getRequestVerificationToken();
+        await login(tokens, env);
+
+        // Refresh token from profile page (often needed)
+        const profileUrl = `https://chomikuj.pl/${env.CHOMIKUJ_USERNAME}`;
+        const newTokens = await getRequestVerificationToken(profileUrl);
+
+        const folderId = options.folder || "0"; // Default to root folder if not specified
+        const uploadUrl = await getUploadUrl(newTokens, env, folderId);
+        await uploadFile(uploadUrl, filePath, options.name);
+      }
     } catch (error) {
-      console.error("Error:", error instanceof Error ? error.message : error);
+      console.error("Error:", error);
       process.exit(1);
     }
   });
 
-import { pathToFileURL } from "url";
-
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  program.parse();
+if (import.meta.url.startsWith("file:")) {
+  const modulePath = import.meta.url.slice(7); // Remove 'file://'
+  if (modulePath === process.argv[1]) {
+    program.parse();
+  }
 }

@@ -32,8 +32,8 @@ describe("Chomikuj Uploader Integration", () => {
     // expect(newTokens).not.toBe(tokens); // Arrays are reference types, so this is always true.
 
     // 4. Get Upload URL
-    // Use folder 4 (from curl example)
-    const uploadUrl = await getUploadUrl(newTokens, env, "4");
+    // Use folder 19 (test folder)
+    const uploadUrl = await getUploadUrl(newTokens, env, "19");
     expect(uploadUrl).toBeDefined();
     expect(uploadUrl).toMatch(/^https?:\/\//);
 
@@ -42,8 +42,18 @@ describe("Chomikuj Uploader Integration", () => {
     if (!fs.existsSync(testFilePath)) {
       fs.writeFileSync(testFilePath, "Integration test content");
     }
+    console.log(`Uploading file: ${testFilePath}...`);
+    const customName = "custom-test-file"; // No extension provided
+    const fileUrl = await uploadFile(uploadUrl, testFilePath, customName);
 
-    await uploadFile(uploadUrl, testFilePath);
+    expect(fileUrl).toBeDefined();
+    expect(typeof fileUrl).toBe("string");
+    expect(fileUrl).toContain("/darrelllance/"); // Basic check based on username
+    expect(fileUrl).toContain("custom-test-file"); // Check if custom name is in URL
+    // The URL usually looks like .../custom-test-file,12345.txt or similar, so checking for the name is safe.
+    // We can also check if it implicitly has the extension if the server preserves it in the URL structure,
+    // but usually Chomikuj URLs are like /path/to/file,id.ext
+    expect(fileUrl).toMatch(/custom-test-file.*\.txt$/); // Ensure extension is preserved at the end
 
     // If we reach here without error, it passed.
   }, 60000); // Increase timeout for network requests
