@@ -41,7 +41,7 @@ npm start -- https://example.com/file.pdf -f 19
 ## Options
 
 - `-f, --folder <id>` - (Required) Folder ID to upload to (default: "0" for root folder)
-- `-n, --name <name>` - (Optional) Custom filename for the upload (extension will be preserved)
+- `-n, --name [name]` - (Optional) Custom filename for the upload (extension will be preserved)
 
 ## Development
 
