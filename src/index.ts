@@ -9,6 +9,8 @@ import { Command } from "commander";
 import os from "os";
 import { pipeline } from "stream/promises";
 import { PassThrough, Transform } from "stream";
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
 
 dotenv.config();
 
@@ -19,7 +21,8 @@ export const EnvSchema = z.object({
   CHOMIKUJ_PASSWORD: z.string(),
 });
 
-const CommandOptionsSchema = z.object({
+const OptionsSchema = z.object({
+  file: z.string(),
   folder: z.string(),
   name: z.string().optional(),
   mimetype: z
@@ -75,6 +78,8 @@ const CommandOptionsSchema = z.object({
     ])
     .optional(),
 });
+
+const CommandOptionsSchema = z.union([OptionsSchema, z.object({ api: z.boolean() })]);
 
 const UploadResponseSchema = z.object({
   files: z.array(
@@ -473,59 +478,107 @@ export async function downloadTempFile(url: string, expectedMimeType?: string): 
   throw new Error(`Redirect loop detected after ${MAX_REDIRECTS} redirects`);
 }
 
+async function processUpload(args: z.infer<typeof OptionsSchema>): Promise<{ url: string }> {
+  const { file, folder, name, mimetype } = args;
+
+  const envParse = EnvSchema.safeParse(process.env);
+  if (!envParse.success) {
+    throw new Error("Invalid environment variables provided. Please check your .env file.");
+  }
+  const env = envParse.data;
+
+  const tokens = await getRequestVerificationToken();
+  await login(tokens, env);
+
+  const profileUrl = `${baseUrl}/${env.CHOMIKUJ_USERNAME}`;
+  const newTokens = await getRequestVerificationToken(profileUrl);
+
+  const uploadUrl = await getUploadUrl(newTokens, env, folder);
+
+  let fileUrl: string;
+  if (file.startsWith("http")) {
+    const tempPath = await downloadTempFile(file, mimetype);
+    try {
+      fileUrl = await uploadFile(uploadUrl, tempPath, name);
+    } finally {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+        unregisterTempFile(tempPath);
+        console.log(`Deleted temp file: ${tempPath}`);
+      }
+    }
+  } else {
+    fileUrl = await uploadFile(uploadUrl, file, name);
+  }
+
+  return { url: fileUrl };
+}
+
 const program = new Command();
 
 program
   .name("chomikuj-uploader")
   .description("Upload files to Chomikuj.pl")
   .version("1.0.0")
-  .argument("<file>", "file path or URL to upload")
-  .requiredOption("-f, --folder <id>", "folder ID to upload to")
+  .argument("[file]", "file path or URL to upload (required in CLI mode)")
+  .option("--api", "start API server instead of CLI mode")
+  .option("-f, --folder <id>", "folder ID to upload to")
   .option("-n, --name <name>", "custom filename for the upload")
   .option("-m, --mimetype <type>", "expected MIME type (only for URL downloads)")
-  .action(async (input: string, opts: z.infer<typeof CommandOptionsSchema>) => {
-    try {
-      const commandOptionsParse = CommandOptionsSchema.safeParse(opts);
-      if (!commandOptionsParse.success) {
-        throw new Error("Invalid command options provided. Please check your arguments.");
-      }
-      const { folder, name, mimetype } = commandOptionsParse.data;
+  .action(async (file: string | undefined, opts: z.infer<typeof CommandOptionsSchema>) => {
+    const commandOptionsParse = CommandOptionsSchema.safeParse({ ...opts, file });
+    if (!commandOptionsParse.success) {
+      throw new Error("Invalid command options provided. Please check your arguments.");
+    }
+    const { data } = commandOptionsParse;
 
-      const envParse = EnvSchema.safeParse(process.env);
-      if (!envParse.success) {
-        throw new Error("Invalid environment variables provided. Please check your .env file.");
-      }
-      const env = envParse.data;
+    if ("api" in data) {
+      const app = new Hono();
 
-      const tokens = await getRequestVerificationToken();
-      await login(tokens, env);
-
-      const profileUrl = `${baseUrl}/${env.CHOMIKUJ_USERNAME}`;
-      const newTokens = await getRequestVerificationToken(profileUrl);
-
-      const uploadUrl = await getUploadUrl(newTokens, env, folder);
-
-      if (input.startsWith("http")) {
-        const tempPath = await downloadTempFile(input, mimetype);
+      app.post("/upload", async (c) => {
         try {
-          await uploadFile(uploadUrl, tempPath, name);
-        } finally {
-          if (fs.existsSync(tempPath)) {
-            fs.unlinkSync(tempPath);
-            unregisterTempFile(tempPath);
-            console.log(`Deleted temp file: ${tempPath}`);
+          const body = await c.req.json();
+          const parsed = OptionsSchema.safeParse(body);
+
+          if (!parsed.success) {
+            return c.json({ error: "Invalid request body", details: parsed.error.format() }, 400);
           }
+
+          const { file, folder, name, mimetype } = parsed.data;
+          const result = await processUpload({ file, folder, name, mimetype });
+
+          return c.json({ success: true, url: `${baseUrl}/${result.url}` });
+        } catch (error) {
+          console.error("API error:", error);
+          if (error instanceof z.ZodError) {
+            return c.json({ error: "Validation error", details: error.format() }, 400);
+          }
+          return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
         }
-      } else {
-        await uploadFile(uploadUrl, input, name);
+      });
+
+      const port = 6666;
+      console.log(`API server listening on port ${port}`);
+      console.log(`POST http://localhost:${port}/upload`);
+
+      serve({ fetch: app.fetch, port }, (info) => {
+        console.log(`Server started at http://localhost:${info.port}`);
+      });
+    } else {
+      try {
+        if (!file) throw new Error("File argument is required");
+        const { folder, name, mimetype } = data;
+
+        const result = await processUpload({ file, folder, name, mimetype });
+        console.log(`\n✓ Upload successful: ${baseUrl}/${result.url}`);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          console.error("Error:", error.format());
+        } else {
+          console.error("Error:", error);
+        }
+        process.exit(1);
       }
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        console.error("Error:", error.format());
-      } else {
-        console.error("Error:", error);
-      }
-      process.exit(1);
     }
   });
 
