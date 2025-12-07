@@ -485,8 +485,17 @@ program
   .option("-m, --mimetype <type>", "expected MIME type (only for URL downloads)")
   .action(async (input: string, opts: z.infer<typeof CommandOptionsSchema>) => {
     try {
-      const { folder, name, mimetype } = CommandOptionsSchema.parse(opts);
-      const env = EnvSchema.parse(process.env);
+      const commandOptionsParse = CommandOptionsSchema.safeParse(opts);
+      if (!commandOptionsParse.success) {
+        throw new Error("Invalid command options provided. Please check your arguments.");
+      }
+      const { folder, name, mimetype } = commandOptionsParse.data;
+
+      const envParse = EnvSchema.safeParse(process.env);
+      if (!envParse.success) {
+        throw new Error("Invalid environment variables provided. Please check your .env file.");
+      }
+      const env = envParse.data;
 
       const tokens = await getRequestVerificationToken();
       await login(tokens, env);
@@ -511,7 +520,11 @@ program
         await uploadFile(uploadUrl, input, name);
       }
     } catch (error) {
-      console.error("Error:", error);
+      if (error instanceof z.ZodError) {
+        console.error("Error:", error.format());
+      } else {
+        console.error("Error:", error);
+      }
       process.exit(1);
     }
   });
