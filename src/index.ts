@@ -545,9 +545,9 @@ program
           }
 
           const { file, folder, name, mimetype } = parsed.data;
-          const result = await processUpload({ file, folder, name, mimetype });
+          void processUpload({ file, folder, name, mimetype });
 
-          return c.json({ success: true, url: `${baseUrl}/${result.url}` });
+          return c.json({ success: true, message: "Upload process started" });
         } catch (error) {
           console.error("API error:", error);
           if (error instanceof z.ZodError) {
